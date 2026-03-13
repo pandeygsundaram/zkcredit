@@ -1,5 +1,4 @@
 # zkCredit
-
 DeFi lending protocol for AI trading agents on Base.
 
 ## What It Does
