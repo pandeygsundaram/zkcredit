@@ -1,0 +1,53 @@
+{
+  "network": "base-sepolia",
+  "chainId": 84532,
+  "deploymentTimestamp": "2026-03-14T00:46:00Z",
+  "deployer": "0x...",
+  "contracts": {
+    "BitGoRegistry": {
+      "address": "0x2a4AfcA45186aDd4EaA2e03c07b2cF3E183F9bc9",
+      "blockNumber": 38830509,
+      "txHash": "0xca176b32c073c11cd4d1bd8e03d36acf36fa0f2f33fa00d1841509be8e0d8166"
+    },
+    "CreditVerifier": {
+      "address": "0xf59c39DC0E76D002891D36af4Bc03E3b4e70B5e2",
+      "blockNumber": 38830509,
+      "txHash": "0xe17516190f6410d04b3f3fa42faf5933f8914afef9392e31e5916a4d9c1b900a"
+    },
+    "ZKCreditResolver": {
+      "address": "0x2284c393Ab207A899288B53ad492Aea0a8894bBB",
+      "blockNumber": 38830510,
+      "txHash": "0x9c2a9a43a6dc52694d2c09f2b75af2ba522c6089fc5eb0f6ccd0274a4eb665b0"
+    },
+    "StealthRegistry": {
+      "address": "0x55584DC11EFC4e726dDdd3Da258D8336a7d02aED",
+      "blockNumber": 38830510,
+      "txHash": "0x9019ef6ecafb01421a00b2413c48933d6f5311a6fb557a0d4e3ba927df9d3cc3"
+    },
+    "CollateralVault": {
+      "address": "0xC747d58A3535F96C409A1dD0A886ea12d90968A1",
+      "blockNumber": 38830510,
+      "txHash": "0xc10ed5d09e7572d2a50127409a2f04192767db78eb3aa9376e75109b87fe068b"
+    },
+    "LoanManager": {
+      "address": "0x90f389219b1a51CD474c05dc87b594C288a2e5e0",
+      "blockNumber": 38830510,
+      "txHash": "0xb860459c44376c18f9ff04563f4e652f2e79df98a3505d0a7220e15715545be4"
+    },
+    "ZKCreditVerifier": {
+      "address": "0x960d2752B40B7f874a9a4E750AC3671eABBf7ba6",
+      "blockNumber": 38830510,
+      "txHash": "0x95433d2090e4b9c1bd5a953f5b4d21afc3ade7583202bdf4e95c0b8257506998"
+    }
+  },
+  "configuration": {
+    "oracleSigner": "0x14e0D556fFe746BC5ab12902423bDa63DeA08Bf9",
+    "bitgoVerifier": "0x80E5E2947549fd4d451b77f82f884871EEb543c9",
+    "usdc": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+    "groth16Verifier": "0x5FbDB2315678afecb367f032d93F642f64180aa3"
+  },
+  "urls": {
+    "explorer": "https://sepolia.basescan.org",
+    "rpc": "https://sepolia.base.org"
+  }
+}
