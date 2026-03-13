@@ -8,6 +8,7 @@ import {ZKCreditResolver} from "../src/ZKCreditResolver.sol";
 import {StealthRegistry} from "../src/StealthRegistry.sol";
 import {CollateralVault} from "../src/CollateralVault.sol";
 import {LoanManager} from "../src/LoanManager.sol";
+import {ZKCreditVerifier} from "../src/ZKCreditVerifier.sol";
 
 contract DeployScript is Script {
     function run() external {
@@ -15,6 +16,7 @@ contract DeployScript is Script {
         address usdc = vm.envAddress("USDC_ADDRESS");
         address oracleSigner = vm.envAddress("ORACLE_SIGNER");
         address bitgoVerifier = vm.envAddress("BITGO_VERIFIER");
+        address groth16Verifier = vm.envAddress("GROTH16_VERIFIER");
 
         vm.startBroadcast(pk);
 
@@ -24,11 +26,14 @@ contract DeployScript is Script {
         StealthRegistry stealth = new StealthRegistry(address(bitgo));
         CollateralVault vault = new CollateralVault(usdc);
         LoanManager manager = new LoanManager(address(verifier), address(vault), address(stealth), address(bitgo), address(resolver));
+        ZKCreditVerifier zkVerifier = new ZKCreditVerifier(groth16Verifier, address(verifier), oracleSigner);
 
         vault.setLoanManager(address(manager));
         resolver.setController(address(manager), true);
         stealth.setLoanManager(address(manager));
         verifier.setScorer(address(manager), true);
+        verifier.setScorer(address(zkVerifier), true);
+        manager.setZKCreditVerifier(address(zkVerifier));
 
         vm.stopBroadcast();
     }

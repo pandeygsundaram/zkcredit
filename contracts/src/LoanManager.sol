@@ -6,6 +6,7 @@ import {CollateralVault} from "./CollateralVault.sol";
 import {StealthRegistry} from "./StealthRegistry.sol";
 import {BitGoRegistry} from "./BitGoRegistry.sol";
 import {ZKCreditResolver} from "./ZKCreditResolver.sol";
+import {ZKCreditVerifier} from "./ZKCreditVerifier.sol";
 
 contract LoanManager {
     CreditVerifier public immutable creditVerifier;
@@ -14,6 +15,8 @@ contract LoanManager {
     BitGoRegistry public immutable bitGoRegistry;
     ZKCreditResolver public immutable resolver;
     address public owner;
+
+    ZKCreditVerifier public zkCreditVerifier;
 
     uint256 public constant PHASE_COUNT = 4;
     uint256 public constant PHASE_INTERVAL = 7 days;
@@ -49,6 +52,7 @@ contract LoanManager {
     mapping(address => bool) public hasActiveLoan;
     mapping(address => uint256) public assetQualityBps;
 
+    event ZKVerifierUpdated(address indexed zkVerifier);
     event LoanOpened(bytes32 indexed loanId, address indexed agent, address indexed stealthAddress);
     event MilestoneProgressed(bytes32 indexed loanId, uint8 phase, uint256 collateralAdded, uint256 principalReleased);
     event MilestoneExtended(bytes32 indexed loanId, uint256 extensionSeconds, uint256 newCheckpoint);
@@ -69,17 +73,17 @@ contract LoanManager {
         owner = msg.sender;
     }
 
-    /// @notice Sets collateral quality multiplier for quote calculation.
-    /// @param token Collateral token address.
-    /// @param qualityBps Quality multiplier in bps (8000-12000).
+    /// @notice Wires optional ZK verifier used alongside oracle path.
+    function setZKCreditVerifier(address zkVerifier_) external onlyOwner {
+        zkCreditVerifier = ZKCreditVerifier(zkVerifier_);
+        emit ZKVerifierUpdated(zkVerifier_);
+    }
+
     function setAssetQuality(address token, uint256 qualityBps) external onlyOwner {
         require(qualityBps >= 8000 && qualityBps <= 12000, "invalid quality");
         assetQualityBps[token] = qualityBps;
     }
 
-    /// @notice Returns quote based on valid score and provided collateral basket.
-    /// @param collateralTokens Token list.
-    /// @param collateralAmounts Amount list.
     function getQuote(address[] calldata collateralTokens, uint256[] calldata collateralAmounts)
         public
         view
@@ -100,12 +104,6 @@ contract LoanManager {
         return (s, t, apr, maxP);
     }
 
-    /// @notice Opens a new loan and links stealth address (self-custody or BitGo path).
-    /// @param collateralTokens Collateral token list.
-    /// @param collateralAmounts Collateral amount list.
-    /// @param totalPrincipal Desired total principal.
-    /// @param stealthAddress Loan-specific stealth address.
-    /// @param attestOrSignature Self signature or BitGo attestation.
     function openLoan(
         address[] calldata collateralTokens,
         uint256[] calldata collateralAmounts,
@@ -120,10 +118,9 @@ contract LoanManager {
         (uint256 score, uint8 tier, uint256 aprBps, uint256 maxPrincipal) = getQuote(collateralTokens, collateralAmounts);
         require(totalPrincipal <= maxPrincipal && totalPrincipal <= 100000e6, "principal too high");
 
-        // Tier 4+ hardening: if not BitGo verified, require stronger collateral equivalent to tier-3 minimum.
         if (tier >= 4 && !bitGoRegistry.isBitGoVerified(msg.sender)) {
             uint256 effectiveCollateral = _effectiveCollateral(collateralTokens, collateralAmounts);
-            ( , uint256 levRaw, ) = creditVerifier.latestRecords(msg.sender);
+            (, uint256 levRaw,) = creditVerifier.latestRecords(msg.sender);
             uint256 lev = levRaw == 0 ? 10000 : levRaw;
             uint256 tier3MinCollateral = (totalPrincipal * 10000 * 10000) / (creditVerifier.tierToLtvBps(3) * lev);
             require(effectiveCollateral >= tier3MinCollateral, "Tier 4+ requires BitGo verification or extra collateral");
@@ -173,8 +170,6 @@ contract LoanManager {
         emit LoanOpened(loanId, msg.sender, stealthAddress);
     }
 
-    /// @notice Progresses loan to next milestone (deposit next collateral tranche and release principal tranche).
-    /// @param loanId Loan identifier.
     function progressMilestone(bytes32 loanId) external {
         Loan storage l = loans[loanId];
         require(l.active && !l.repaid && !l.liquidated, "inactive");
@@ -207,9 +202,6 @@ contract LoanManager {
         emit MilestoneProgressed(loanId, l.phase, collateralAddedValue, principalToRelease);
     }
 
-    /// @notice Extends current milestone checkpoint to avoid immediate default.
-    /// @param loanId Loan identifier.
-    /// @param extensionSeconds Extension duration (max 7 days).
     function extendMilestone(bytes32 loanId, uint256 extensionSeconds) external {
         Loan storage l = loans[loanId];
         require(l.active && !l.repaid && !l.liquidated, "inactive");
@@ -220,9 +212,6 @@ contract LoanManager {
         emit MilestoneExtended(loanId, extensionSeconds, l.lastPhaseAt);
     }
 
-    /// @notice Repays debt from caller and closes loan when fully repaid.
-    /// @param loanId Loan identifier.
-    /// @param amount Repayment amount in USDC terms.
     function repay(bytes32 loanId, uint256 amount) external {
         Loan storage l = loans[loanId];
         require(l.active && !l.repaid && !l.liquidated, "inactive");
@@ -237,9 +226,6 @@ contract LoanManager {
         }
     }
 
-    /// @notice Triggers default and liquidation when conditions are met.
-    /// @param loanId Loan identifier.
-    /// @param reason Human-readable reason emitted for off-chain monitoring.
     function triggerDefault(bytes32 loanId, string calldata reason) external {
         Loan storage l = loans[loanId];
         require(l.active && !l.repaid && !l.liquidated, "inactive");
@@ -253,8 +239,6 @@ contract LoanManager {
         emit DefaultTriggered(loanId, reason);
     }
 
-    /// @notice Callback used by vault to mark loan as defaulted.
-    /// @param loanId Loan identifier.
     function recordDefault(bytes32 loanId) external {
         require(msg.sender == address(collateralVault), "only vault");
         Loan storage l = loans[loanId];

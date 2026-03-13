@@ -14,9 +14,6 @@ docs/
 .env
 # Node modules
 **/node_modules/
-cache/
-
-circom/
 
 # OS-specific files (optional)
 .DS_Store
@@ -25,3 +22,10 @@ Thumbs.db
 # VSCode or other editor settings (optional)
 .vscode/
 .idea/
+
+# snarkjs build artifacts
+build/*.zkey
+build/verification_key.json
+build/Groth16Verifier.sol
+
+powersOfTau28_hez_final_22.ptau
