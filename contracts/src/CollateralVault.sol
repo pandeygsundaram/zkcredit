@@ -64,11 +64,17 @@ contract CollateralVault {
         tokenPrice[usdc_] = 1e18;
     }
 
+    /// @notice Sets LoanManager allowed to mutate loan state.
+    /// @param next New manager address.
     function setLoanManager(address next) external onlyLoanManager {
         require(next != address(0), "invalid manager");
         loanManager = next;
     }
 
+    /// @notice Adds or updates a supported collateral token and its price scalar.
+    /// @param token Token address.
+    /// @param supported Whether token is enabled.
+    /// @param price Price scalar (1e18 = 1x).
     function setSupportedToken(address token, bool supported, uint256 price) external onlyLoanManager {
         require(token != address(0), "invalid token");
         require(price > 0, "invalid price");
@@ -77,6 +83,7 @@ contract CollateralVault {
         emit SupportedTokenSet(token, supported, price);
     }
 
+    /// @notice Preview total collateral value for a basket.
     function previewCollateralValue(address[] calldata tokens, uint256[] calldata amounts) external view returns (uint256 totalValue) {
         require(tokens.length == amounts.length, "length mismatch");
         for (uint256 i = 0; i < tokens.length; i++) {
@@ -85,11 +92,13 @@ contract CollateralVault {
         }
     }
 
+    /// @notice Preview collateral value for one token amount.
     function previewSingleCollateralValue(address token, uint256 amount) external view returns (uint256) {
         require(supportedTokens[token], "unsupported token");
         return _valueOf(token, amount);
     }
 
+    /// @notice Deposits phase-1 collateral and releases phase-1 principal.
     function fundInitialLoan(
         bytes32 loanId,
         address agent,
@@ -131,6 +140,7 @@ contract CollateralVault {
         emit LoanFunded(loanId, agent, stealthAddress, totalCollateralValue, principal);
     }
 
+    /// @notice Adds additional collateral for a milestone.
     function addCollateral(bytes32 loanId, address token, uint256 amount) external onlyLoanManager {
         VaultLoan storage l = loans[loanId];
         require(l.active && !l.liquidated, "inactive");
@@ -144,6 +154,7 @@ contract CollateralVault {
         emit CollateralAdded(loanId, token, amount, valueAdded);
     }
 
+    /// @notice Releases next principal tranche to stealth address.
     function releaseTranche(bytes32 loanId, uint256 amount) external onlyLoanManager {
         VaultLoan storage l = loans[loanId];
         require(l.active && !l.liquidated, "inactive");
@@ -152,6 +163,7 @@ contract CollateralVault {
         emit TrancheReleased(loanId, amount);
     }
 
+    /// @notice Processes repayment and returns remaining debt.
     function processRepayment(bytes32 loanId, uint256 amount, address from)
         external
         onlyLoanManager
@@ -177,6 +189,7 @@ contract CollateralVault {
         emit RepaymentProcessed(loanId, amount, debtLeft, fullyRepaid);
     }
 
+    /// @notice Liquidates unsafe loans and pays keeper reward.
     function liquidate(bytes32 loanId) external {
         VaultLoan storage l = loans[loanId];
         require(l.active && !l.liquidated, "inactive");
@@ -201,6 +214,7 @@ contract CollateralVault {
         emit LoanLiquidated(loanId, msg.sender, keeperReward, protocolFee, repaidDebt);
     }
 
+    /// @notice Returns current debt including accrued interest.
     function getCurrentDebt(bytes32 loanId) public view returns (uint256) {
         VaultLoan memory l = loans[loanId];
         if (!l.active || l.liquidated) return 0;
@@ -211,6 +225,7 @@ contract CollateralVault {
         return grossDebt - l.totalRepaid;
     }
 
+    /// @notice Returns collateral ratio in basis points.
     function getCollateralRatioBps(bytes32 loanId) external view returns (uint256) {
         VaultLoan memory l = loans[loanId];
         if (!l.active || l.liquidated) return type(uint256).max;
@@ -219,10 +234,12 @@ contract CollateralVault {
         return (l.collateral * 10000) / debt;
     }
 
+    /// @notice Returns tracked collateral value for a loan.
     function getCollateralValue(bytes32 loanId) external view returns (uint256) {
         return loans[loanId].collateral;
     }
 
+    /// @notice Placeholder PnL hook for milestone policy.
     function getLoanPnl(bytes32) external pure returns (int256) {
         return 0;
     }
