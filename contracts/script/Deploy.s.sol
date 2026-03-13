@@ -3,33 +3,37 @@ pragma solidity ^0.8.19;
 
 import {Script} from "forge-std/Script.sol";
 import {CreditVerifier} from "../src/CreditVerifier.sol";
-import {CollateralVault} from "../src/CollateralVault.sol";
 import {BitGoRegistry} from "../src/BitGoRegistry.sol";
 import {ZKCreditResolver} from "../src/ZKCreditResolver.sol";
+import {StealthRegistry} from "../src/StealthRegistry.sol";
+import {CollateralVault} from "../src/CollateralVault.sol";
 import {LoanManager} from "../src/LoanManager.sol";
+import {ZKCreditVerifier} from "../src/ZKCreditVerifier.sol";
 
 contract DeployScript is Script {
     function run() external {
         uint256 pk = vm.envUint("PRIVATE_KEY");
         address usdc = vm.envAddress("USDC_ADDRESS");
-        address axiomQuery = vm.envAddress("AXIOM_QUERY_ADDRESS");
-        address bitGoVerifier = vm.envAddress("BITGO_VERIFIER");
+        address oracleSigner = vm.envAddress("ORACLE_SIGNER");
+        address bitgoVerifier = vm.envAddress("BITGO_VERIFIER");
+        address groth16Verifier = vm.envAddress("GROTH16_VERIFIER");
 
         vm.startBroadcast(pk);
 
-        CreditVerifier verifier = new CreditVerifier();
-        verifier.setAxiomQueryAddress(axiomQuery);
-
-        CollateralVault vault = new CollateralVault(usdc);
-        BitGoRegistry registry = new BitGoRegistry(bitGoVerifier);
-
+        BitGoRegistry bitgo = new BitGoRegistry(bitgoVerifier);
+        CreditVerifier verifier = new CreditVerifier(oracleSigner, address(bitgo));
         ZKCreditResolver resolver = new ZKCreditResolver();
-        LoanManager manager = new LoanManager(address(verifier), address(vault), address(registry), address(resolver));
+        StealthRegistry stealth = new StealthRegistry(address(bitgo));
+        CollateralVault vault = new CollateralVault(usdc);
+        LoanManager manager = new LoanManager(address(verifier), address(vault), address(stealth), address(bitgo), address(resolver));
+        ZKCreditVerifier zkVerifier = new ZKCreditVerifier(groth16Verifier, address(verifier), oracleSigner);
 
         vault.setLoanManager(address(manager));
         resolver.setController(address(manager), true);
-        registry.setLoanManager(address(manager));
+        stealth.setLoanManager(address(manager));
         verifier.setScorer(address(manager), true);
+        verifier.setScorer(address(zkVerifier), true);
+        manager.setZKCreditVerifier(address(zkVerifier));
 
         vm.stopBroadcast();
     }

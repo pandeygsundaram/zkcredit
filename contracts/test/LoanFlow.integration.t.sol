@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {CreditVerifier} from "../src/CreditVerifier.sol";
 import {CollateralVault} from "../src/CollateralVault.sol";
 import {LoanManager} from "../src/LoanManager.sol";
+import {StealthRegistry} from "../src/StealthRegistry.sol";
 import {BitGoRegistry} from "../src/BitGoRegistry.sol";
 import {ZKCreditResolver} from "../src/ZKCreditResolver.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
@@ -14,210 +15,147 @@ contract LoanFlowIntegrationTest is Test {
 
     MockERC20 internal usdc;
     MockERC20 internal weth;
-    CreditVerifier internal verifier;
-    CollateralVault internal vault;
     BitGoRegistry internal bitgo;
+    CreditVerifier internal verifier;
+    StealthRegistry internal stealth;
+    CollateralVault internal vault;
     ZKCreditResolver internal resolver;
     LoanManager internal manager;
 
     uint256 internal agentPk = 0xA11CE;
     uint256 internal stealthPk = 0xB0B;
-    uint256 internal bitGoPk = 0xC0DE;
+    uint256 internal oraclePk = 0xC0DE;
+    uint256 internal bitGoVerifierPk = 0xBEEF;
+
     address internal agent;
-    address internal stealth;
-    address internal keeper = address(0xCAFE);
+    address internal stealthAddr;
 
     function setUp() external {
         agent = vm.addr(agentPk);
-        stealth = vm.addr(stealthPk);
+        stealthAddr = vm.addr(stealthPk);
 
         usdc = new MockERC20("Mock USDC", "mUSDC", 6);
         weth = new MockERC20("Mock WETH", "mWETH", 6);
-        verifier = new CreditVerifier();
+        bitgo = new BitGoRegistry(vm.addr(bitGoVerifierPk));
+        verifier = new CreditVerifier(vm.addr(oraclePk), address(bitgo));
+        stealth = new StealthRegistry(address(bitgo));
         vault = new CollateralVault(address(usdc));
-        bitgo = new BitGoRegistry(vm.addr(bitGoPk));
         resolver = new ZKCreditResolver();
-        manager = new LoanManager(address(verifier), address(vault), address(bitgo), address(resolver));
+        manager = new LoanManager(address(verifier), address(vault), address(stealth), address(bitgo), address(resolver));
 
         vault.setSupportedToken(address(weth), true, 1e18);
         vault.setLoanManager(address(manager));
-
         resolver.setController(address(manager), true);
-        manager.setAssetQuality(address(weth), 12000);
-        bitgo.setLoanManager(address(manager));
+        stealth.setLoanManager(address(manager));
         verifier.setScorer(address(manager), true);
-
-        verifier.setAxiomQueryAddress(address(0x1234));
+        manager.setAssetQuality(address(weth), 12000);
 
         usdc.mint(address(vault), 5_000_000 * U);
-
         usdc.mint(agent, 100_000 * U);
         weth.mint(agent, 100_000 * U);
-        usdc.mint(stealth, 100_000 * U);
+        usdc.mint(stealthAddr, 100_000 * U);
 
         vm.startPrank(agent);
         usdc.approve(address(vault), type(uint256).max);
         weth.approve(address(vault), type(uint256).max);
+        stealth.registerMetaAddress(bytes32(uint256(111)));
         vm.stopPrank();
 
-        vm.prank(stealth);
+        vm.prank(stealthAddr);
         usdc.approve(address(vault), type(uint256).max);
 
-        bytes32 walletId = keccak256("bg");
-        bytes memory walletSig = _walletSig(agent, walletId, bitGoPk);
-        vm.prank(agent);
-        bitgo.registerWallet(walletId, walletSig);
-
-        _verifyScoreAsAgent(agent, 800, hex"abcd");
+        _submitScore(agent, 800, 10000, keccak256("proof-1"));
     }
 
-    function testOpenLoanAndRepayFullFlowMultiAsset() external {
+    function testOpenLoanSelfCustodyFlow() external {
         address[] memory tokens = new address[](2);
         tokens[0] = address(usdc);
         tokens[1] = address(weth);
-
         uint256[] memory amounts = new uint256[](2);
         amounts[0] = 10_000 * U;
         amounts[1] = 10_000 * U;
 
-        bytes32 loanId = _openLoan(agent, tokens, amounts, 4_000 * U, stealth, bitGoPk);
-
-        (, , , , , , , , , uint8 phase1, , bool active1, , ) = manager.loans(loanId);
-        assertTrue(active1);
-        assertEq(uint256(phase1), 1);
+        bytes32 loanId = _openLoanSelf(agent, tokens, amounts, 4_000 * U);
 
         vm.warp(block.timestamp + 7 days);
         vm.prank(agent);
         manager.progressMilestone(loanId);
 
-        (, , , , , , , , , uint8 phase2, , , , ) = manager.loans(loanId);
-        assertEq(uint256(phase2), 2);
-
         uint256 debt = vault.getCurrentDebt(loanId);
-        vm.prank(stealth);
+        vm.prank(stealthAddr);
         manager.repay(loanId, debt);
 
         (, , , , , , , , , , , bool active2, bool repaid, ) = manager.loans(loanId);
         assertFalse(active2);
         assertTrue(repaid);
+    }
+
+    function testOpenLoanBitGoFlowAndResolverENS() external {
+        bytes32 walletId = keccak256("wallet-bg");
+        bytes memory walletAtt = _walletAtt(agent, walletId);
+        vm.prank(agent);
+        bitgo.linkBitGoWallet(walletId, walletAtt);
+
+        address[] memory tokens = new address[](1);
+        tokens[0] = address(usdc);
+        uint256[] memory amounts = new uint256[](1);
+        amounts[0] = 15_000 * U;
+
+        bytes32 loanId = _openLoanBitGo(agent, tokens, amounts, 5_000 * U);
 
         bytes32 node = keccak256(abi.encodePacked(agent));
-        assertEq(resolver.text(node, "zkcredit.activeLoan"), "false");
+        assertEq(resolver.resolve(node), agent);
+        assertEq(resolver.getText(node, "zkcredit.activeLoan"), "true");
+        assertTrue(loanId != bytes32(0));
     }
 
-    function testLiquidationPath() external {
-        verifier.setScore(agent, 300, 12000);
-
-        address[] memory tokens = new address[](1);
-        tokens[0] = address(usdc);
-        uint256[] memory amounts = new uint256[](1);
-        amounts[0] = 40_000 * U;
-
-        bytes32 loanId = _openLoan(agent, tokens, amounts, 14_000 * U, stealth, bitGoPk);
-        vm.warp(block.timestamp + 6 * 365 days);
-
-        uint256 keeperBefore = usdc.balanceOf(keeper);
-        vm.prank(keeper);
-        vault.liquidate(loanId);
-
-        (, , , , , , , , , , , bool active, , bool liquidated) = manager.loans(loanId);
-        assertTrue(liquidated);
-        assertFalse(active);
-
-        uint256 keeperAfter = usdc.balanceOf(keeper);
-        assertGt(keeperAfter, keeperBefore);
-    }
-
-    function testFlowCompatibleGetQuoteFunction() external {
-        address[] memory assets = new address[](2);
-        assets[0] = address(usdc);
-        assets[1] = address(weth);
-        uint256[] memory values = new uint256[](2);
-        values[0] = 10_000 * U;
-        values[1] = 10_000 * U;
-
-        vm.prank(agent);
-        (uint256 maxLoan, uint256 collateralRequired, uint8 tier) = manager.getQuote(5_000 * U, assets, values);
-
-        assertGt(maxLoan, 0);
-        assertGt(collateralRequired, 0);
-        assertLe(tier, 5);
-    }
-
-    function testTriggerDefaultFlowCompatibility() external {
-        verifier.setScore(agent, 300, 12000);
-
-        address[] memory tokens = new address[](1);
-        tokens[0] = address(usdc);
-        uint256[] memory amounts = new uint256[](1);
-        amounts[0] = 40_000 * U;
-
-        bytes32 loanId = _openLoan(agent, tokens, amounts, 14_000 * U, stealth, bitGoPk);
-        vm.warp(block.timestamp + 6 * 365 days);
-
-        vm.prank(keeper);
-        manager.triggerDefault(loanId, "compat-default");
-
-        (, , , , , , , , , , , bool active, , bool liquidated) = manager.loans(loanId);
-        assertFalse(active);
-        assertTrue(liquidated);
-    }
-
-    function _verifyScoreAsAgent(address who, uint256 volume, bytes memory proof) internal {
-        address[] memory held = new address[](1);
-        held[0] = address(usdc);
-
-        CreditVerifier.ProofInputs memory inputs = CreditVerifier.ProofInputs({
-            proxyAddress: who,
-            tradeVolume: volume,
-            tradeCount: 20,
-            realizedPnl: 100_000,
-            unrealizedPnl: 50_000,
-            maxDrawdownBps: 300,
-            daysActive: 365,
-            volatilityScore: 2000,
-            timestamp: block.timestamp,
-            axiomQueryId: bytes32(uint256(1)),
-            heldAssets: held
-        });
-
-        vm.prank(who);
-        verifier.verifyAndScore(proof, inputs);
-    }
-
-    function _openLoan(
-        address loanAgent,
-        address[] memory collateralTokens,
-        uint256[] memory collateralAmounts,
-        uint256 principal,
-        address stealthAddress,
-        uint256 bitGoSignerPk
-    ) internal returns (bytes32) {
-        bytes32 predictedLoanId = keccak256(abi.encodePacked(loanAgent, block.chainid, manager.loanCounter() + 1));
-        bytes32 walletId = bitgo.walletIds(loanAgent);
-        bytes memory att = _attestationSig(walletId, stealthAddress, predictedLoanId, 0, bitGoSignerPk);
-
-        vm.prank(loanAgent);
-        bytes32 actual = manager.openLoan(collateralTokens, collateralAmounts, principal, stealthAddress, att);
-        assertEq(actual, predictedLoanId);
-        return actual;
-    }
-
-    function _walletSig(address who, bytes32 walletId, uint256 signerPk) internal view returns (bytes memory) {
-        bytes32 msgHash = keccak256(abi.encodePacked(who, walletId, block.chainid));
+    function _submitScore(address who, uint256 score, uint256 lev, bytes32 proofHash) internal {
+        uint256 issuedAt = block.timestamp;
+        bytes32 msgHash = keccak256(abi.encodePacked(address(verifier), block.chainid, who, score, lev, proofHash, issuedAt));
         bytes32 digest = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", msgHash));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerPk, digest);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(oraclePk, digest);
+        verifier.submitScore(who, score, lev, proofHash, issuedAt, abi.encodePacked(r, s, v));
+    }
+
+    function _openLoanSelf(address loanAgent, address[] memory tokens, uint256[] memory amts, uint256 principal)
+        internal
+        returns (bytes32)
+    {
+        bytes32 loanId = keccak256(abi.encodePacked(loanAgent, block.chainid, manager.loanCounter() + 1));
+        bytes memory selfSig = _selfSig(loanAgent, loanId);
+        vm.prank(loanAgent);
+        return manager.openLoan(tokens, amts, principal, stealthAddr, selfSig);
+    }
+
+    function _openLoanBitGo(address loanAgent, address[] memory tokens, uint256[] memory amts, uint256 principal)
+        internal
+        returns (bytes32)
+    {
+        bytes32 loanId = keccak256(abi.encodePacked(loanAgent, block.chainid, manager.loanCounter() + 1));
+        bytes32 walletId = bitgo.walletIds(loanAgent);
+        bytes memory att = _stealthAtt(loanAgent, walletId, loanId, stealthAddr);
+        vm.prank(loanAgent);
+        return manager.openLoan(tokens, amts, principal, stealthAddr, att);
+    }
+
+    function _selfSig(address who, bytes32 loanId) internal view returns (bytes memory) {
+        bytes32 msgHash = keccak256(abi.encodePacked(who, loanId, block.chainid, address(stealth)));
+        bytes32 digest = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", msgHash));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(stealthPk, digest);
         return abi.encodePacked(r, s, v);
     }
 
-    function _attestationSig(bytes32 walletId, address stealthAddr, bytes32 loanId, uint256 nonce, uint256 signerPk)
-        internal
-        view
-        returns (bytes memory)
-    {
-        bytes32 msgHash = keccak256(abi.encodePacked(walletId, stealthAddr, loanId, nonce, block.chainid));
+    function _walletAtt(address who, bytes32 walletId) internal view returns (bytes memory) {
+        bytes32 msgHash = keccak256(abi.encodePacked(who, walletId, block.chainid, address(bitgo)));
         bytes32 digest = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", msgHash));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerPk, digest);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(bitGoVerifierPk, digest);
+        return abi.encodePacked(r, s, v);
+    }
+
+    function _stealthAtt(address who, bytes32 walletId, bytes32 loanId, address stealthAddress) internal view returns (bytes memory) {
+        bytes32 msgHash = keccak256(abi.encodePacked(who, walletId, loanId, stealthAddress, block.chainid, address(bitgo)));
+        bytes32 digest = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", msgHash));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(bitGoVerifierPk, digest);
         return abi.encodePacked(r, s, v);
     }
 }

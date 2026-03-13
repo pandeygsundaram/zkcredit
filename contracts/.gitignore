@@ -12,3 +12,16 @@ docs/
 
 # Dotenv file
 .env
+# Node modules
+**/node_modules/
+cache/
+
+circom/
+
+# OS-specific files (optional)
+.DS_Store
+Thumbs.db
+
+# VSCode or other editor settings (optional)
+.vscode/
+.idea/

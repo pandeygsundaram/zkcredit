@@ -1,10 +1,21 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
+import {BitGoRegistry} from "./BitGoRegistry.sol";
+
+/**
+ * @title CreditVerifier
+ * @notice Trusted-oracle credit scoring for zkCredit (off-chain oracle + optional BitGo bonus).
+ */
 contract CreditVerifier {
     uint256 public constant MIN_SCORE = 300;
     uint256 public constant MAX_SCORE = 850;
     uint256 public constant SCORE_VALIDITY = 7 days;
+
+    address public owner;
+    address public oracleSigner;
+    BitGoRegistry public immutable bitGoRegistry;
+    mapping(address => bool) public scorers;
 
     struct ScoreRecord {
         uint256 score;
@@ -12,32 +23,14 @@ contract CreditVerifier {
         uint256 updatedAt;
     }
 
-    struct ProofInputs {
-        address proxyAddress;
-        uint256 tradeVolume;
-        uint256 tradeCount;
-        int256 realizedPnl;
-        int256 unrealizedPnl;
-        uint256 maxDrawdownBps;
-        uint256 daysActive;
-        uint256 volatilityScore;
-        uint256 timestamp;
-        bytes32 axiomQueryId;
-        address[] heldAssets;
-    }
-
-    address public owner;
-    mapping(address => bool) public scorers;
     mapping(address => ScoreRecord) public latestRecords;
     mapping(address => uint256) public latestScores;
     mapping(address => uint256) public scoreTimestamp;
+    mapping(bytes32 => bool) public usedProofHashes;
 
-    address public axiomQueryAddress;
-    mapping(bytes32 => bool) public usedProofs;
-
+    event OracleSignerUpdated(address indexed signer);
     event ScorerUpdated(address indexed scorer, bool allowed);
-    event ScoreUpdated(address indexed agent, uint256 score, uint8 tier, uint256 leverageBps);
-    event AxiomQueryUpdated(address indexed axiomQuery);
+    event ScoreSubmitted(address indexed agent, uint256 score, uint8 tier, uint256 leverageBps, bytes32 proofHash);
 
     modifier onlyOwner() {
         require(msg.sender == owner, "only owner");
@@ -49,75 +42,84 @@ contract CreditVerifier {
         _;
     }
 
-    constructor() {
+    constructor(address oracleSigner_, address bitgoRegistry_) {
+        require(oracleSigner_ != address(0), "invalid oracle");
         owner = msg.sender;
+        oracleSigner = oracleSigner_;
+        bitGoRegistry = BitGoRegistry(bitgoRegistry_);
         scorers[msg.sender] = true;
     }
 
-    function setAxiomQueryAddress(address axiomQuery_) external onlyOwner {
-        axiomQueryAddress = axiomQuery_;
-        emit AxiomQueryUpdated(axiomQuery_);
+    /// @notice Updates trusted oracle signer used for score attestations.
+    /// @param signer New oracle signer address.
+    function setOracleSigner(address signer) external onlyOwner {
+        require(signer != address(0), "invalid oracle");
+        oracleSigner = signer;
+        emit OracleSignerUpdated(signer);
     }
 
+    /// @notice Grants or revokes scorer role (used by LoanManager for bonus/penalty updates).
+    /// @param scorer Address to update.
+    /// @param allowed Whether scorer role is enabled.
     function setScorer(address scorer, bool allowed) external onlyOwner {
         scorers[scorer] = allowed;
         emit ScorerUpdated(scorer, allowed);
     }
 
+    /// @notice Scorer role direct score update hook (used by ZKCreditVerifier and manager policies).
     function setScore(address agent, uint256 score, uint256 leverageBps) external onlyScorer {
+        require(agent != address(0), "invalid agent");
+        require(score >= MIN_SCORE && score <= MAX_SCORE, "score out of range");
+        require(leverageBps >= 8000 && leverageBps <= 12000, "invalid leverage");
         _storeScore(agent, score, leverageBps);
     }
 
-    function verifyAndScore(bytes calldata proof, ProofInputs calldata inputs)
-        external
-        returns (uint256 score, uint8 tier, uint256 leverageBps)
-    {
-        bytes32 proofHash = keccak256(proof);
-        require(!usedProofs[proofHash], "proof reused");
-        require(_verifyAxiom(inputs.axiomQueryId, proof), "invalid proof");
+    /// @notice Submits a score signed by off-chain trusted oracle.
+    /// @param agent Agent receiving the score.
+    /// @param score Raw score (300-850).
+    /// @param leverageBps Leverage multiplier in bps.
+    /// @param proofHash Uniqueness hash to prevent replay.
+    /// @param issuedAt Oracle attestation timestamp.
+    /// @param oracleSignature Oracle ECDSA signature.
+    function submitScore(
+        address agent,
+        uint256 score,
+        uint256 leverageBps,
+        bytes32 proofHash,
+        uint256 issuedAt,
+        bytes calldata oracleSignature
+    ) external {
+        require(agent != address(0), "invalid agent");
+        require(score >= MIN_SCORE && score <= MAX_SCORE, "score out of range");
+        require(leverageBps >= 8000 && leverageBps <= 12000, "invalid leverage");
+        require(!usedProofHashes[proofHash], "proof used");
+        require(block.timestamp <= issuedAt + 1 hours, "stale attestation");
 
-        usedProofs[proofHash] = true;
+        bytes32 message = keccak256(
+            abi.encodePacked(address(this), block.chainid, agent, score, leverageBps, proofHash, issuedAt)
+        );
+        require(_recoverSigner(message, oracleSignature) == oracleSigner, "invalid oracle signature");
 
-        score = _calculateFromInputs(inputs);
-        leverageBps = _calculateLeverage(inputs.heldAssets);
-        tier = scoreToTier(score);
+        // Hybrid bonus: institutional BitGo-verified agents get +25 score cap to 850.
+        if (bitGoRegistry.isBitGoVerified(agent)) {
+            score = score + 25;
+            if (score > MAX_SCORE) score = MAX_SCORE;
+        }
 
-        latestRecords[msg.sender] = ScoreRecord({score: score, leverageBps: leverageBps, updatedAt: block.timestamp});
-        latestScores[msg.sender] = score;
-        scoreTimestamp[msg.sender] = block.timestamp;
-        emit ScoreUpdated(msg.sender, score, tier, leverageBps);
+        usedProofHashes[proofHash] = true;
+        _storeScore(agent, score, leverageBps);
+        emit ScoreSubmitted(agent, score, scoreToTier(score), leverageBps, proofHash);
     }
 
-    function applyDefaultPenalty(address agent) external onlyScorer {
-        uint256 score = latestRecords[agent].score;
-        if (score == 0) return;
-        uint256 next = score > 100 ? score - 100 : MIN_SCORE;
-        if (next < MIN_SCORE) next = MIN_SCORE;
-        _storeScore(agent, next, latestRecords[agent].leverageBps == 0 ? 10000 : latestRecords[agent].leverageBps);
-    }
-
-    function applyRepaymentBonus(address agent) external onlyScorer {
-        uint256 score = latestRecords[agent].score;
-        if (score == 0) return;
-        uint256 next = score + 25;
-        if (next > MAX_SCORE) next = MAX_SCORE;
-        _storeScore(agent, next, latestRecords[agent].leverageBps == 0 ? 10000 : latestRecords[agent].leverageBps);
-    }
-
-    function latestScore(address agent) external view returns (uint256) {
-        return latestRecords[agent].score;
-    }
-
-    function latestLeverageBps(address agent) external view returns (uint256) {
-        uint256 lev = latestRecords[agent].leverageBps;
-        return lev == 0 ? 10000 : lev;
-    }
-
+    /// @notice Returns whether an agent has a non-expired score record.
+    /// @param agent Agent address.
     function isScoreValid(address agent) external view returns (bool) {
         uint256 ts = latestRecords[agent].updatedAt;
         return ts != 0 && block.timestamp <= ts + SCORE_VALIDITY;
     }
 
+    /// @notice Maps score to risk tier.
+    /// @param score Credit score.
     function scoreToTier(uint256 score) public pure returns (uint8) {
         if (score >= 800) return 5;
         if (score >= 740) return 4;
@@ -127,6 +129,8 @@ contract CreditVerifier {
         return 0;
     }
 
+    /// @notice Returns max LTV for a tier.
+    /// @param tier Risk tier.
     function tierToLtvBps(uint8 tier) public pure returns (uint256) {
         if (tier == 5) return 9000;
         if (tier == 4) return 8500;
@@ -136,6 +140,8 @@ contract CreditVerifier {
         return 3000;
     }
 
+    /// @notice Returns APR for a tier.
+    /// @param tier Risk tier.
     function tierToAprBps(uint8 tier) public pure returns (uint256) {
         if (tier == 5) return 400;
         if (tier == 4) return 600;
@@ -145,67 +151,44 @@ contract CreditVerifier {
         return 3000;
     }
 
-    function _storeScore(address agent, uint256 score, uint256 leverageBps) internal {
-        require(agent != address(0), "invalid agent");
-        require(score >= MIN_SCORE && score <= MAX_SCORE, "score out of range");
-        require(leverageBps >= 8000 && leverageBps <= 12000, "invalid leverage");
+    /// @notice Applies default penalty to agent score.
+    /// @param agent Agent address.
+    function applyDefaultPenalty(address agent) external onlyScorer {
+        uint256 score = latestRecords[agent].score;
+        if (score == 0) return;
+        uint256 next = score > 100 ? score - 100 : MIN_SCORE;
+        if (next < MIN_SCORE) next = MIN_SCORE;
+        _storeScore(agent, next, latestRecords[agent].leverageBps == 0 ? 10000 : latestRecords[agent].leverageBps);
+    }
 
+    /// @notice Applies repayment bonus to agent score.
+    /// @param agent Agent address.
+    function applyRepaymentBonus(address agent) external onlyScorer {
+        uint256 score = latestRecords[agent].score;
+        if (score == 0) return;
+        uint256 next = score + 25;
+        if (next > MAX_SCORE) next = MAX_SCORE;
+        _storeScore(agent, next, latestRecords[agent].leverageBps == 0 ? 10000 : latestRecords[agent].leverageBps);
+    }
+
+    function _storeScore(address agent, uint256 score, uint256 leverageBps) internal {
         latestRecords[agent] = ScoreRecord({score: score, leverageBps: leverageBps, updatedAt: block.timestamp});
         latestScores[agent] = score;
         scoreTimestamp[agent] = block.timestamp;
-        emit ScoreUpdated(agent, score, scoreToTier(score), leverageBps);
     }
 
-    function _verifyAxiom(bytes32, bytes calldata proof) internal view returns (bool) {
-        if (axiomQueryAddress == address(0)) return false;
-        return proof.length > 0;
-    }
-
-    function _calculateFromInputs(ProofInputs memory i) internal pure returns (uint256) {
-        int256 base = int256(MIN_SCORE);
-
-        base += int256(_logScale(i.tradeVolume, 1e6, 1e12, 100));
-        base += int256(_signedNormalize(i.realizedPnl + i.unrealizedPnl, -1e6, 1e6, 0, 200));
-        base += int256((10000 - i.volatilityScore) * 100 / 10000);
-        base += int256(i.daysActive > 365 ? 50 : (i.daysActive * 50 / 365));
-        base -= int256(i.maxDrawdownBps > 5000 ? 100 : (i.maxDrawdownBps * 100 / 5000));
-
-        if (base < int256(MIN_SCORE)) return MIN_SCORE;
-        if (base > int256(MAX_SCORE)) return MAX_SCORE;
-        return uint256(base);
-    }
-
-    function _calculateLeverage(address[] memory heldAssets) internal pure returns (uint256) {
-        if (heldAssets.length == 0) return 10000;
-
-        uint256 weighted;
-        for (uint256 i = 0; i < heldAssets.length; i++) {
-            weighted += _assetQuality(heldAssets[i]);
+    function _recoverSigner(bytes32 message, bytes memory sig) internal pure returns (address) {
+        require(sig.length == 65, "bad sig length");
+        bytes32 r;
+        bytes32 s;
+        uint8 v;
+        assembly {
+            r := mload(add(sig, 32))
+            s := mload(add(sig, 64))
+            v := byte(0, mload(add(sig, 96)))
         }
-        return weighted / heldAssets.length;
-    }
-
-    function _assetQuality(address token) internal pure returns (uint256) {
-        if (token == address(0)) return 12000; // treat native as high quality
-        return 10000;
-    }
-
-    function _logScale(uint256 value, uint256 min, uint256 max, uint256 outMax) internal pure returns (uint256) {
-        if (value <= min) return 0;
-        if (value >= max) return outMax;
-        return ((value - min) * outMax) / (max - min);
-    }
-
-    function _signedNormalize(int256 value, int256 min, int256 max, uint256 outMin, uint256 outMax)
-        internal
-        pure
-        returns (uint256)
-    {
-        if (value <= min) return outMin;
-        if (value >= max) return outMax;
-        int256 spanIn = max - min;
-        int256 spanOut = int256(outMax - outMin);
-        int256 normalized = ((value - min) * spanOut) / spanIn;
-        return outMin + uint256(normalized);
+        if (v < 27) v += 27;
+        bytes32 digest = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", message));
+        return ecrecover(digest, v, r, s);
     }
 }
