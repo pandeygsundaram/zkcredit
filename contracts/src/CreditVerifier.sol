@@ -66,6 +66,14 @@ contract CreditVerifier {
         emit ScorerUpdated(scorer, allowed);
     }
 
+    /// @notice Scorer role direct score update hook (used by ZKCreditVerifier and manager policies).
+    function setScore(address agent, uint256 score, uint256 leverageBps) external onlyScorer {
+        require(agent != address(0), "invalid agent");
+        require(score >= MIN_SCORE && score <= MAX_SCORE, "score out of range");
+        require(leverageBps >= 8000 && leverageBps <= 12000, "invalid leverage");
+        _storeScore(agent, score, leverageBps);
+    }
+
     /// @notice Submits a score signed by off-chain trusted oracle.
     /// @param agent Agent receiving the score.
     /// @param score Raw score (300-850).

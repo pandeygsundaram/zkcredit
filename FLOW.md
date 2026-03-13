@@ -3,6 +3,7 @@
 ## Overview
 zkCredit is a lending protocol for AI trading agents that combines:
 - Off-chain credit scoring (trusted oracle)
+- ZK score attestation path (Groth16 + Merkleized history)
 - Hybrid wallet support:
   - Self-custody stealth wallets (retail path)
   - BitGo-verified stealth wallets (institutional path)
@@ -16,6 +17,11 @@ zkCredit is a lending protocol for AI trading agents that combines:
   - Score validity: 7 days
   - Tier mapping + LTV/APR mapping
   - Applies BitGo bonus (+25, capped at 850)
+- `ZKCreditVerifier.sol`
+  - Verifies Groth16 proof from `polymarket_history.circom`
+  - Checks Merkle root authorization (oracle signature or pre-accepted root)
+  - Enforces nullifier uniqueness (anti replay)
+  - Pushes score into `CreditVerifier.setScore(...)`
 - `BitGoRegistry.sol`
   - Links BitGo wallet IDs via BitGo attestation
   - Tracks `isBitGoVerified(agent)`
@@ -49,6 +55,8 @@ zkCredit is a lending protocol for AI trading agents that combines:
   - Calls `CreditVerifier.submitScore(...)`
   - Stores score metadata to Fileverse client
   - Exposes BitGo status endpoint
+  - Builds daily Poseidon Merkle tree of agent histories
+  - Returns per-agent Merkle path + root signature for ZK proving
 - `offchain/bitgo-client.js`
   - Handles BitGo onboarding/KYC flow integration points
   - Generates BitGo stealth address + attestation payload
@@ -58,6 +66,10 @@ zkCredit is a lending protocol for AI trading agents that combines:
 - `offchain/fileverse-client.js`
   - Stores agent profiles and loan documents (versioned)
   - Updates ENS resolver contenthash
+- `offchain/agent-prover.js`
+  - Builds circuit input locally from own history + oracle path
+  - Runs `snarkjs` to generate Groth16 proof
+  - Returns Solidity-ready calldata for `submitZKScore(...)`
 
 ## Deployment Order
 1. `BitGoRegistry(bitGoVerifier)`
@@ -66,12 +78,15 @@ zkCredit is a lending protocol for AI trading agents that combines:
 4. `StealthRegistry(bitGoRegistry)`
 5. `CollateralVault(usdc)`
 6. `LoanManager(verifier, vault, stealthRegistry, bitGoRegistry, resolver)`
+7. `ZKCreditVerifier(groth16Verifier, verifier, oracleSigner)`
 
 Then wire:
 - `vault.setLoanManager(loanManager)`
 - `resolver.setController(loanManager, true)`
 - `stealthRegistry.setLoanManager(loanManager)`
 - `verifier.setScorer(loanManager, true)`
+- `verifier.setScorer(zkCreditVerifier, true)`
+- `loanManager.setZKCreditVerifier(zkCreditVerifier)`
 
 ## Runtime Flow
 
@@ -90,6 +105,12 @@ Then wire:
 - Builds proof hash and signs message
 - Calls `CreditVerifier.submitScore(...)`
 - If agent is BitGo-verified, contract adds +25 score bonus (max 850)
+
+### 2b. Score Submission (ZK)
+- Oracle server publishes daily Poseidon Merkle root of agent history commitments
+- Agent fetches own path once and generates Groth16 proof locally
+- Agent calls `ZKCreditVerifier.submitZKScore(...)`
+- ZK verifier writes score to `CreditVerifier` without storing proxy/trade details
 
 ### 3. Quote
 - Agent calls `LoanManager.getQuote(tokens, amounts)`
