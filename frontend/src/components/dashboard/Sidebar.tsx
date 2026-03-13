@@ -13,6 +13,7 @@ import {
   Key,
   Settings,
   LogOut,
+  Fingerprint,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 
@@ -32,10 +33,11 @@ const Sidebar: React.FC<SidebarProps> = ({
   setIsDark,
 }) => {
   const menuItems = [
-    { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-    { id: "loans", label: "Loans", icon: FileText },
-    { id: "api-keys", label: "API Keys", icon: Key },
-    { id: "settings", label: "Settings", icon: Settings },
+    { id: "dashboard",   label: "Dashboard",    icon: LayoutDashboard },
+    { id: "loans",       label: "Loans",         icon: FileText },
+    { id: "ens-profile", label: "ENS Identity",  icon: Fingerprint },
+    { id: "api-keys",    label: "API Keys",       icon: Key },
+    { id: "settings",    label: "Settings",       icon: Settings },
   ];
 
   return (
