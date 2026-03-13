@@ -10,6 +10,7 @@ import DashboardView from "./DashboardView";
 import LoansView from "./LoansView";
 import ApiKeysView from "./ApiKeysView";
 import SettingsView from "./SettingsView";
+import EnsProfile from "./EnsProfile";
 
 interface DashboardLayoutProps {
   onLogout: () => void;
@@ -40,10 +41,11 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.3 }}
         >
-          {activeTab === "dashboard" && <DashboardView />}
-          {activeTab === "loans" && <LoansView />}
-          {activeTab === "api-keys" && <ApiKeysView />}
-          {activeTab === "settings" && <SettingsView />}
+          {activeTab === "dashboard"   && <DashboardView />}
+          {activeTab === "loans"       && <LoansView />}
+          {activeTab === "ens-profile" && <EnsProfile />}
+          {activeTab === "api-keys"    && <ApiKeysView />}
+          {activeTab === "settings"    && <SettingsView />}
         </motion.div>
       </main>
     </div>
