@@ -1,6 +1,8 @@
 # zkCredit Smart Contract Flow
 
 ## Contract Architecture
+
+```markdown
 ┌─────────────────────────────────────────────────────────────────┐
 │                     CONTRACT DEPLOYMENTS                        │
 │                                                                 │
@@ -28,7 +30,7 @@
 │                   │  adapter)   │                              │
 │                   └─────────────┘                              │
 └─────────────────────────────────────────────────────────────────┘
-
+```
 
 
 ---
@@ -493,9 +495,13 @@ contract LoanManager {
         }
     }
 }
+
+----
+
 4. CollateralVault.sol
 Purpose: Multi-asset custody, milestone-based release, liquidation execution.
-solidity
+
+```solidity
 
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
@@ -589,9 +595,12 @@ contract CollateralVault {
         emit Liquidated(loanId, collateralValue, debt);
     }
 }
-Integration Flow Diagram
+```
+---
 
+### Integration Flow Diagram:
 
+```markdown
 ┌─────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐
 │  Agent  │────→│  BitGo   │────→│   ZK     │────→│  Credit  │
 │  Wallet │     │  Stealth │     │  Proof   │     │ Verifier │
@@ -611,8 +620,12 @@ Integration Flow Diagram
               │ • Multi-asset│
               │ • Liquidation│
               └─────────────┘
-Key State Transitions
-Table
+
+```
+---
+
+### Key State Transitions
+```Table
 State	Trigger	Next State	Action
 NO_LOAN	Agent requests quote	QUOTED	Score calculated, terms offered
 QUOTED	Agent accepts, deposits Phase 1	PHASE_1_ACTIVE	25% collateral locked, 25% loan released

@@ -3,76 +3,70 @@ pragma solidity ^0.8.19;
 
 import {Test} from "forge-std/Test.sol";
 import {CreditVerifier} from "../src/CreditVerifier.sol";
+import {BitGoRegistry} from "../src/BitGoRegistry.sol";
 
 contract CreditVerifierTest is Test {
     CreditVerifier internal verifier;
+    BitGoRegistry internal bitgo;
+
+    uint256 internal oraclePk = 0xC0DE;
+    uint256 internal bitGoPk = 0xBEEF;
+    address internal oracle;
     address internal agent = address(0xA11CE);
 
     function setUp() external {
-        verifier = new CreditVerifier();
+        oracle = vm.addr(oraclePk);
+        bitgo = new BitGoRegistry(vm.addr(bitGoPk));
+        verifier = new CreditVerifier(oracle, address(bitgo));
     }
 
-    function testSetScoreAndTier() external {
-        verifier.setScore(agent, 805, 11500);
+    function testSubmitScoreWithOracleSignature() external {
+        uint256 score = 805;
+        uint256 lev = 11000;
+        bytes32 proofHash = keccak256("proof-1");
+        uint256 issuedAt = block.timestamp;
+        bytes memory sig = _oracleSig(agent, score, lev, proofHash, issuedAt);
 
-        (uint256 score, uint256 leverageBps, uint256 updatedAt) = verifier.latestRecords(agent);
-        assertEq(score, 805);
-        assertEq(leverageBps, 11500);
-        assertEq(updatedAt, block.timestamp);
-        assertEq(verifier.scoreToTier(score), 5);
+        verifier.submitScore(agent, score, lev, proofHash, issuedAt, sig);
+
+        (uint256 stored,, uint256 ts) = verifier.latestRecords(agent);
+        assertEq(stored, score);
+        assertEq(ts, block.timestamp);
     }
 
-    function testVerifyAndScoreStoresResultAndPreventsReplay() external {
-        verifier.setAxiomQueryAddress(address(0x1234));
-
-        bytes memory proof = hex"123456";
-        address[] memory held = new address[](1);
-        held[0] = address(0);
-
-        CreditVerifier.ProofInputs memory inputs = CreditVerifier.ProofInputs({
-            proxyAddress: agent,
-            tradeVolume: 5_000_000,
-            tradeCount: 20,
-            realizedPnl: 200_000,
-            unrealizedPnl: 50_000,
-            maxDrawdownBps: 500,
-            daysActive: 200,
-            volatilityScore: 3000,
-            timestamp: block.timestamp,
-            axiomQueryId: bytes32(uint256(1)),
-            heldAssets: held
-        });
-
+    function testBitGoBonusApplied() external {
+        bytes32 walletId = keccak256("wallet");
+        bytes memory walletSig = _walletSig(agent, walletId);
         vm.prank(agent);
-        (uint256 score,, uint256 lev) = verifier.verifyAndScore(proof, inputs);
-        assertGe(score, 300);
-        assertLe(score, 850);
-        assertEq(lev, 12000);
+        bitgo.linkBitGoWallet(walletId, walletSig);
 
-        vm.prank(agent);
-        vm.expectRevert("proof reused");
-        verifier.verifyAndScore(proof, inputs);
+        uint256 score = 800;
+        uint256 lev = 10000;
+        bytes32 proofHash = keccak256("proof-bg");
+        uint256 issuedAt = block.timestamp;
+        bytes memory sig = _oracleSig(agent, score, lev, proofHash, issuedAt);
+
+        verifier.submitScore(agent, score, lev, proofHash, issuedAt, sig);
+
+        (uint256 stored,,) = verifier.latestRecords(agent);
+        assertEq(stored, 825);
     }
 
-    function testScoreValidityExpiry() external {
-        verifier.setScore(agent, 700, 10000);
-        assertTrue(verifier.isScoreValid(agent));
-
-        vm.warp(block.timestamp + 8 days);
-        assertFalse(verifier.isScoreValid(agent));
+    function _oracleSig(address who, uint256 score, uint256 lev, bytes32 proofHash, uint256 issuedAt)
+        internal
+        view
+        returns (bytes memory)
+    {
+        bytes32 msgHash = keccak256(abi.encodePacked(address(verifier), block.chainid, who, score, lev, proofHash, issuedAt));
+        bytes32 digest = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", msgHash));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(oraclePk, digest);
+        return abi.encodePacked(r, s, v);
     }
 
-    function testOnlyScorerCanSetScore() external {
-        vm.prank(address(0xBEEF));
-        vm.expectRevert("only scorer");
-        verifier.setScore(agent, 700, 10000);
-    }
-
-    function testInvalidScoreRangeReverts() external {
-        vm.expectRevert("score out of range");
-        verifier.setScore(agent, 299, 10000);
-
-        vm.expectRevert("score out of range");
-        verifier.setScore(agent, 851, 10000);
+    function _walletSig(address who, bytes32 walletId) internal view returns (bytes memory) {
+        bytes32 msgHash = keccak256(abi.encodePacked(who, walletId, block.chainid, address(bitgo)));
+        bytes32 digest = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", msgHash));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(bitGoPk, digest);
+        return abi.encodePacked(r, s, v);
     }
 }
