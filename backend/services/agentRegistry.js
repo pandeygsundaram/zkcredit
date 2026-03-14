@@ -1,5 +1,39 @@
-// In-memory Map for storing agents
-const registry = new Map();
+const fs = require('fs');
+const path = require('path');
+
+const DATA_DIR = path.join(__dirname, '..', 'data');
+const DATA_FILE = path.join(DATA_DIR, 'agents.json');
+
+function loadRegistry() {
+  try {
+    if (!fs.existsSync(DATA_FILE)) {
+      return new Map();
+    }
+
+    const raw = fs.readFileSync(DATA_FILE, 'utf8');
+    if (!raw.trim()) {
+      return new Map();
+    }
+
+    const entries = JSON.parse(raw);
+    return new Map(entries);
+  } catch (error) {
+    console.error('Failed to load agent registry:', error);
+    return new Map();
+  }
+}
+
+function saveRegistry() {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(DATA_FILE, JSON.stringify([...registry.entries()], null, 2));
+  } catch (error) {
+    console.error('Failed to persist agent registry:', error);
+  }
+}
+
+// Persistent Map for storing agents between backend restarts
+const registry = loadRegistry();
 
 // ─── Tier config (mirrors LoanManager.tiers[]) ──────────────────────────────
 // tier => { minScore, maxLTV (bps), interestAPR (bps), maxLoan (USD) }
@@ -54,8 +88,12 @@ const register = (wallet, ens_name, polymarket_metadata = null, ens_identity = n
   const agentId = existingAgent.agentId || (registry.size + 1).toString();
 
   // Compute credit score using contract-aligned formula
+  const scoreExpired = existingAgent.score_valid_until
+    ? new Date(existingAgent.score_valid_until).getTime() <= Date.now()
+    : true;
+
   let creditScore = existingAgent.credit_score || 0;
-  if (isFirstTime && polymarket_metadata) {
+  if ((isFirstTime || scoreExpired) && polymarket_metadata) {
     creditScore = calculateScore(polymarket_metadata);
   }
 
@@ -77,23 +115,27 @@ const register = (wallet, ens_name, polymarket_metadata = null, ens_identity = n
     ltv_bps: tierConfig.ltvBps,
     apr_bps: tierConfig.aprBps,
     max_loan_usd: tierConfig.maxLoan,
-    score_valid_until: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(), // 7 days
+    score_valid_until: polymarket_metadata || scoreExpired || isFirstTime
+      ? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
+      : existingAgent.score_valid_until,
     // Loan state (mirrors ZKCreditResolver ENS records once on-chain)
     ens_records: {
       'agentfi-id':          agentId,
       'zkcredit.score':      String(creditScore),
       'zkcredit.tier':       String(tier),
-      'zkcredit.activeLoan': 'false',
-      'zkcredit.milestone':  '0',
-      'zkcredit.loanId':     '',
+      'zkcredit.activeLoan': existingAgent.ens_records?.['zkcredit.activeLoan'] || 'false',
+      'zkcredit.milestone':  existingAgent.ens_records?.['zkcredit.milestone'] || '0',
+      'zkcredit.loanId':     existingAgent.ens_records?.['zkcredit.loanId'] || '',
     },
     metadata: {
       createdAt: existingAgent.metadata?.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
       fileStoreRef: `ipfs://agentfi/agent/${agentId}`,
     },
   };
 
   registry.set(address, agent);
+  saveRegistry();
   return { agent, isFirstTime };
 };
 

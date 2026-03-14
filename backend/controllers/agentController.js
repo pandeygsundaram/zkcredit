@@ -52,10 +52,8 @@ const getQuote = (req, res) => {
   const agent = agentRegistry.get(wallet);
   if (!agent) return res.status(404).json({ error: 'Agent not registered' });
 
-  // Check score validity (mirrors CreditVerifier.isScoreValid — 7 days)
-  const scoreAge = Date.now() - new Date(agent.metadata.createdAt).getTime();
-  const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
-  if (scoreAge > SEVEN_DAYS_MS) {
+  const scoreValidUntil = agent.score_valid_until ? new Date(agent.score_valid_until).getTime() : 0;
+  if (!scoreValidUntil || scoreValidUntil <= Date.now()) {
     return res.status(403).json({ error: 'Credit score expired — please re-verify' });
   }
 

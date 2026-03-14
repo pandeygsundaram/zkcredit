@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useAccount, useConnect, useDisconnect, useEnsName, useEnsAvatar, useEnsText, useEnsAddress } from 'wagmi';
 import { injected } from 'wagmi/connectors';
 import { Wallet, ShieldCheck, AlertCircle, TrendingUp, Layers } from 'lucide-react';
@@ -54,17 +54,17 @@ function ENSWalletInner() {
   const { connect }    = useConnect();
   const { disconnect } = useDisconnect();
 
-  const { data: ensName }    = useEnsName({ address: address!, chainId: 1, query: { enabled: !!address } });
+  const { data: ensName, refetch: refetchEnsName } = useEnsName({ address: address!, chainId: 1, query: { enabled: !!address } });
   const { data: ensAvatar }  = useEnsAvatar({ name: ensName || undefined, chainId: 1, query: { enabled: !!ensName } });
-  const { data: ensAddress } = useEnsAddress({ name: ensName || undefined, chainId: 1, query: { enabled: !!ensName } });
+  const { data: ensAddress, refetch: refetchEnsAddress } = useEnsAddress({ name: ensName || undefined, chainId: 1, query: { enabled: !!ensName } });
 
   // ZKCreditResolver TXT records
-  const { data: ensAgentId }    = useEnsText({ name: ensName || undefined, key: ENS_KEY_AGENT_ID,    chainId: 1, query: { enabled: !!ensName } });
-  const { data: ensScore }      = useEnsText({ name: ensName || undefined, key: ENS_KEY_SCORE,       chainId: 1, query: { enabled: !!ensName } });
-  const { data: ensTier }       = useEnsText({ name: ensName || undefined, key: ENS_KEY_TIER,        chainId: 1, query: { enabled: !!ensName } });
-  const { data: ensActiveLoan } = useEnsText({ name: ensName || undefined, key: ENS_KEY_ACTIVE_LOAN, chainId: 1, query: { enabled: !!ensName } });
-  const { data: ensMilestone }  = useEnsText({ name: ensName || undefined, key: ENS_KEY_MILESTONE,   chainId: 1, query: { enabled: !!ensName } });
-  const { data: ensLoanId }     = useEnsText({ name: ensName || undefined, key: ENS_KEY_LOAN_ID,     chainId: 1, query: { enabled: !!ensName } });
+  const { data: ensAgentId, refetch: refetchEnsAgentId } = useEnsText({ name: ensName || undefined, key: ENS_KEY_AGENT_ID, chainId: 1, query: { enabled: !!ensName } });
+  const { data: ensScore, refetch: refetchEnsScore } = useEnsText({ name: ensName || undefined, key: ENS_KEY_SCORE, chainId: 1, query: { enabled: !!ensName } });
+  const { data: ensTier, refetch: refetchEnsTier } = useEnsText({ name: ensName || undefined, key: ENS_KEY_TIER, chainId: 1, query: { enabled: !!ensName } });
+  const { data: ensActiveLoan, refetch: refetchEnsActiveLoan } = useEnsText({ name: ensName || undefined, key: ENS_KEY_ACTIVE_LOAN, chainId: 1, query: { enabled: !!ensName } });
+  const { data: ensMilestone, refetch: refetchEnsMilestone } = useEnsText({ name: ensName || undefined, key: ENS_KEY_MILESTONE, chainId: 1, query: { enabled: !!ensName } });
+  const { data: ensLoanId, refetch: refetchEnsLoanId } = useEnsText({ name: ensName || undefined, key: ENS_KEY_LOAN_ID, chainId: 1, query: { enabled: !!ensName } });
 
   // Local state
   const [agentId,        setAgentId]        = useState<string | null>(null);
@@ -74,6 +74,7 @@ function ENSWalletInner() {
   const [ensip25Record,  setEnsip25Record]  = useState<DecodedENSIP25 | null>(null);
   const [lendingAddress, setLendingAddress] = useState<string | null>(null);
   const [loading,        setLoading]        = useState(false);
+  const [refreshingEns,  setRefreshingEns]  = useState(false);
 
   // ─── Registration flow ───────────────────────────────────────────────────────
   useEffect(() => {
@@ -126,6 +127,24 @@ function ENSWalletInner() {
       setQuoteDetails(res);
     } catch (e) {
       console.error(e);
+    }
+  };
+
+  const refreshEnsVerification = async () => {
+    setRefreshingEns(true);
+    try {
+      await refetchEnsName();
+      await Promise.all([
+        refetchEnsAddress(),
+        refetchEnsAgentId(),
+        refetchEnsScore(),
+        refetchEnsTier(),
+        refetchEnsActiveLoan(),
+        refetchEnsMilestone(),
+        refetchEnsLoanId(),
+      ]);
+    } finally {
+      setRefreshingEns(false);
     }
   };
 
@@ -221,6 +240,9 @@ function ENSWalletInner() {
                 <p><span className="text-zinc-400">Key:  </span>{ENS_KEY_AGENT_ID}</p>
                 <p><span className="text-zinc-400">Value:</span> {agentId}</p>
               </div>
+              <Button className="mt-4" size="sm" onClick={refreshEnsVerification}>
+                {refreshingEns ? 'Checking ENS...' : 'I added the TXT record'}
+              </Button>
             </div>
           </div>
         </Card>

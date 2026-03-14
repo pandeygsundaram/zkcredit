@@ -1,0 +1,35 @@
+[
+  [
+    "0x1234567890abcdef1234567890abcdef12345678",
+    {
+      "agentId": "1",
+      "wallet": "0x1234567890abcdef1234567890abcdef12345678",
+      "ens_name": "dummy-agent.eth",
+      "ens_identity": {
+        "name": "dummy-agent.eth",
+        "chain": "ethereum",
+        "address": "0x1234567890abcdef1234567890ABCDEF12345678"
+      },
+      "credit_score": 706,
+      "tier": 3,
+      "tier_label": "Good",
+      "ltv_bps": 7500,
+      "apr_bps": 900,
+      "max_loan_usd": 50000,
+      "score_valid_until": "2026-03-21T06:07:35.486Z",
+      "ens_records": {
+        "agentfi-id": "1",
+        "zkcredit.score": "706",
+        "zkcredit.tier": "3",
+        "zkcredit.activeLoan": "false",
+        "zkcredit.milestone": "0",
+        "zkcredit.loanId": ""
+      },
+      "metadata": {
+        "createdAt": "2026-03-14T06:07:35.487Z",
+        "updatedAt": "2026-03-14T06:07:35.490Z",
+        "fileStoreRef": "ipfs://agentfi/agent/1"
+      }
+    }
+  ]
+]
