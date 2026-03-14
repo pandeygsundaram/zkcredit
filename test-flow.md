@@ -73,8 +73,8 @@ Submit a score for the agent:
 curl -X POST http://localhost:8787/submit-score \
   -H "content-type: application/json" \
   -d '{
-    "agentAddress":"0xYOUR_AGENT",
-    "proxyAddress":"0xYOUR_PROXY",
+    "agentAddress":"0xA93Fc5280d63D11e809b77432a941d64edC0958e",
+    "proxyAddress":"0xA93Fc5280d63D11e809b77432a941d64edC0958e",
     "leverageBps":10000
   }'
 ```
@@ -90,6 +90,22 @@ Confirm on-chain record exists:
 ```bash
 cast call $CREDIT_VERIFIER "latestRecords(address)(uint256,uint256,uint256)" 0xYOUR_AGENT --rpc-url $BASE_SEPOLIA_RPC
 ```
+
+## 4.1 GET QUOTE
+
+# Escape properly or use single quotes
+```bash
+cast call "$LOAN_MANAGER" 'getQuote(address[],uint256[])(uint256,uint8,uint256,uint256)' '[0x036CbD53842c5426634e7929541eC2318f3dCF7e]' '[1000000000]' --rpc-url "$BASE_SEPOLIA_RPC" --from '0xA93Fc5280d63D11e809b77432a941d64edC0958e'
+```
+
+```bash
+cast call $LOAN_MANAGER "getQuote(address[],uint256[])(uint256,uint8,uint256,uint256)" \
+  "[0x036CbD53842c5426634e7929541eC2318f3dCF7e]" \
+  "[1000000000]" \
+  --rpc-url $BASE_SEPOLIA_RPC \
+  --from 0xA93Fc5280d63D11e809b77432a941d64edC0958e
+```
+
 
 ## 5. Quote + Loan Approval/Open (Main Path)
 
