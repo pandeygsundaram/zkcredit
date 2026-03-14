@@ -14,6 +14,9 @@ const ORACLE_PRIVATE_KEY = process.env.ORACLE_PRIVATE_KEY;
 const CREDIT_VERIFIER_ADDRESS = process.env.CREDIT_VERIFIER_ADDRESS;
 const ZK_CREDIT_VERIFIER_ADDRESS = process.env.ZK_CREDIT_VERIFIER_ADDRESS;
 const POLYMARKET_SUBGRAPH = process.env.POLYMARKET_SUBGRAPH || 'https://api.thegraph.com/subgraphs/name/polymarket/matic-markets';
+const POLYMARKET_DATA_API = process.env.POLYMARKET_DATA_API || 'https://data-api.polymarket.com';
+const POLYMARKET_GAMMA_API = process.env.POLYMARKET_GAMMA_API || 'https://gamma-api.polymarket.com';
+const POLYMARKET_TIMEOUT_MS = Number(process.env.POLYMARKET_TIMEOUT_MS || 10000);
 
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 const signer = new ethers.Wallet(ORACLE_PRIVATE_KEY, provider);
@@ -49,8 +52,83 @@ function norm(v, min, max, outMin, outMax) {
 }
 
 async function fetchPolymarket(proxyAddress) {
+  const user = proxyAddress.toLowerCase();
+  const nowTs = Math.floor(Date.now() / 1000);
+
+  const safeGet = async (baseURL, path, params, fallback) => {
+    try {
+      const { data } = await axios.get(`${baseURL}${path}`, { params, timeout: POLYMARKET_TIMEOUT_MS });
+      return Array.isArray(data) ? data : (data || fallback);
+    } catch (_) {
+      return fallback;
+    }
+  };
+
+  const [trades, positions, activity, valuePayload, profile] = await Promise.all([
+    safeGet(POLYMARKET_DATA_API, '/trades', { user, limit: 500, offset: 0, takerOnly: true }, []),
+    safeGet(POLYMARKET_DATA_API, '/positions', { user, limit: 200, offset: 0 }, []),
+    safeGet(POLYMARKET_DATA_API, '/activity', { user, limit: 500, offset: 0, sortBy: 'TIMESTAMP', sortDirection: 'DESC' }, []),
+    safeGet(POLYMARKET_DATA_API, '/value', { user }, []),
+    safeGet(POLYMARKET_GAMMA_API, '/public-profile', { address: user }, null)
+  ]);
+
+  const toNum = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const pickFirstNum = (obj, keys) => {
+    for (const k of keys) {
+      if (obj && obj[k] !== undefined && obj[k] !== null) {
+        const n = Number(obj[k]);
+        if (Number.isFinite(n)) return n;
+      }
+    }
+    return 0;
+  };
+
+  const normalized = [];
+
+  for (const t of trades) {
+    const size = toNum(t.size);
+    const price = toNum(t.price);
+    const volume = Math.max(0, size * price);
+    const ts = Math.floor(toNum(t.timestamp)) || nowTs;
+    normalized.push({ volume, profit: 0, trades: 1, timestamp: ts });
+  }
+
+  for (const a of activity) {
+    if (String(a.type || '').toUpperCase() === 'TRADE') continue;
+    const usdcSize = Math.abs(toNum(a.usdcSize));
+    const size = Math.abs(toNum(a.size));
+    const price = toNum(a.price);
+    const volume = usdcSize > 0 ? usdcSize : Math.max(0, size * price);
+    const ts = Math.floor(toNum(a.timestamp)) || nowTs;
+    normalized.push({ volume, profit: 0, trades: 0, timestamp: ts });
+  }
+
+  for (const p of positions) {
+    const unrealized = pickFirstNum(p, ['unrealizedPnl', 'unrealizedPNL', 'pnl', 'profit']);
+    const realized = pickFirstNum(p, ['realizedPnl', 'realizedPNL']);
+    const profit = unrealized + realized;
+    normalized.push({ volume: 0, profit, trades: 0, timestamp: nowTs });
+  }
+
+  // Fetching these keeps integration aligned with public endpoints list.
+  // They are currently not part of the canonical leaf metrics.
+  const totalValue = Array.isArray(valuePayload)
+    ? valuePayload.reduce((acc, x) => acc + toNum(x.value), 0)
+    : toNum(valuePayload?.value);
+  void totalValue;
+  void profile;
+
+  if (normalized.length > 0) {
+    return normalized;
+  }
+
+  // Safe fallback to legacy subgraph path if Data API is unavailable.
   const query = `query($user: String!) { userActivities(where:{user:$user}){ volume profit trades timestamp } }`;
-  const out = await axios.post(POLYMARKET_SUBGRAPH, { query, variables: { user: proxyAddress.toLowerCase() } });
+  const out = await axios.post(POLYMARKET_SUBGRAPH, { query, variables: { user } });
   return out.data?.data?.userActivities || [];
 }
 
