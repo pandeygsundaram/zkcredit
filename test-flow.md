@@ -33,6 +33,12 @@ LOAN_MANAGER=0x90f389219b1a51CD474c05dc87b594C288a2e5e0
 CREDIT_VERIFIER=0xf59c39DC0E76D002891D36af4Bc03E3b4e70B5e2
 STEALTH_REGISTRY=0x55584DC11EFC4e726dDdd3Da258D8336a7d02aED
 ZK_CREDIT_VERIFIER_ADDRESS=...
+
+# simulation: score source history can be a different proxy wallet
+SCORE_PROXY_ADDRESS=0xA93Fc5280d63D11e809b77432a941d64edC0958e
+ORACLE_BASE_URL=http://localhost:8787
+TEST_COLLATERAL_USDC=1000
+TEST_PRINCIPAL_PCT=50
 ```
 
 For `offchain/oracle-server.js`:
@@ -67,13 +73,13 @@ oracle server listening on 8787
 
 ## 4. Score Generation (Oracle Path)
 
-Submit a score for the agent:
+Submit a score for a wallet you control (`agentAddress`) using any proxy history (`proxyAddress`):
 
 ```bash
 curl -X POST http://localhost:8787/submit-score \
   -H "content-type: application/json" \
   -d '{
-    "agentAddress":"0xA93Fc5280d63D11e809b77432a941d64edC0958e",
+    "agentAddress":"0xYOUR_WALLET_ADDRESS",
     "proxyAddress":"0xA93Fc5280d63D11e809b77432a941d64edC0958e",
     "leverageBps":10000
   }'
@@ -91,107 +97,9 @@ Confirm on-chain record exists:
 cast call $CREDIT_VERIFIER "latestRecords(address)(uint256,uint256,uint256)" 0xYOUR_AGENT --rpc-url $BASE_SEPOLIA_RPC
 ```
 
-## 4.1 GET QUOTE
-
-# Escape properly or use single quotes
-```bash
-cast call "$LOAN_MANAGER" 'getQuote(address[],uint256[])(uint256,uint8,uint256,uint256)' '[0x036CbD53842c5426634e7929541eC2318f3dCF7e]' '[1000000000]' --rpc-url "$BASE_SEPOLIA_RPC" --from '0xA93Fc5280d63D11e809b77432a941d64edC0958e'
-```
-
-```bash
-cast call $LOAN_MANAGER "getQuote(address[],uint256[])(uint256,uint8,uint256,uint256)" \
-  "[0x036CbD53842c5426634e7929541eC2318f3dCF7e]" \
-  "[1000000000]" \
-  --rpc-url $BASE_SEPOLIA_RPC \
-  --from 0xA93Fc5280d63D11e809b77432a941d64edC0958e
-```
-
-
 ## 5. Quote + Loan Approval/Open (Main Path)
 
-Create `test-flow.js` with this script:
-
-```js
-const { ethers } = require('ethers');
-require('dotenv').config();
-
-const provider = new ethers.JsonRpcProvider(process.env.BASE_SEPOLIA_RPC);
-const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
-
-const LOAN_MANAGER_ABI = [
-  'function getQuote(address[] tokens,uint256[] amounts) view returns (uint256 maxLoan,uint256 collateralRequired,uint8 tier,uint256 leverageMultiplier)',
-  'function openLoan(uint256 totalCollateral,uint256 totalPrincipal,address stealthAddress,bytes stealthSignature) returns (bytes32 loanId)',
-  'function loans(bytes32) view returns (address agent,address stealthAddress,uint256 scoreAtOpen,uint8 tierAtOpen,uint256 aprBps,uint256 targetPrincipal,uint256 targetCollateral,uint256 releasedPrincipal,uint256 postedCollateral,uint8 phase,uint256 lastPhaseAt,bool active,bool repaid,bool liquidated)',
-  'event LoanOpened(bytes32 indexed loanId,address indexed agent,address indexed stealthAddress)'
-];
-
-const STEALTH_REGISTRY_ABI = [
-  'function registerMetaAddress(bytes32 spendingPubKey) external',
-  'function metaAddresses(address) view returns (bytes32)'
-];
-
-async function main() {
-  const loanManager = new ethers.Contract(process.env.LOAN_MANAGER, LOAN_MANAGER_ABI, wallet);
-  const stealthRegistry = new ethers.Contract(process.env.STEALTH_REGISTRY, STEALTH_REGISTRY_ABI, wallet);
-
-  console.log('1) Ensure stealth meta-address');
-  const zero = '0x' + '00'.repeat(32);
-  const meta = await stealthRegistry.metaAddresses(wallet.address);
-  if (meta === zero) {
-    const spendingPubKey = ethers.keccak256(ethers.randomBytes(32));
-    const tx = await stealthRegistry.registerMetaAddress(spendingPubKey);
-    await tx.wait();
-    console.log('   Registered');
-  } else {
-    console.log('   Already registered');
-  }
-
-  console.log('2) Get quote');
-  const usdc = process.env.USDC_ADDRESS;
-  const quote = await loanManager.getQuote([usdc], [ethers.parseUnits('1000', 6)]);
-  console.log('   maxLoan:', ethers.formatUnits(quote.maxLoan, 6), 'tier:', Number(quote.tier));
-
-  console.log('3) Create stealth address + signature');
-  const nonce = (await provider.getTransactionCount(wallet.address)) + 1;
-  const stealthAddress = ethers.getCreateAddress({ from: wallet.address, nonce });
-  const digest = ethers.solidityPackedKeccak256(
-    ['address', 'bytes32', 'address'],
-    [wallet.address, ethers.id('test-loan'), stealthAddress]
-  );
-  const signature = await wallet.signMessage(ethers.getBytes(digest));
-
-  console.log('4) Open loan');
-  const tx = await loanManager.openLoan(
-    ethers.parseUnits('1000', 6),
-    ethers.parseUnits('500', 6),
-    stealthAddress,
-    signature
-  );
-  const receipt = await tx.wait();
-
-  const event = receipt.logs
-    .map((log) => {
-      try {
-        return loanManager.interface.parseLog(log);
-      } catch {
-        return null;
-      }
-    })
-    .find((x) => x && x.name === 'LoanOpened');
-
-  if (!event) throw new Error('LoanOpened not found');
-  const loanId = event.args.loanId;
-
-  const loan = await loanManager.loans(loanId);
-  console.log('   loanId:', loanId);
-  console.log('   phase:', Number(loan.phase), 'released:', ethers.formatUnits(loan.releasedPrincipal, 6));
-}
-
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
-```
+Use the provided script at repo root: `test-flow.js`.
 
 Run:
 
@@ -200,6 +108,7 @@ node test-flow.js
 ```
 
 Expected:
+- score submitted for your wallet (`agentAddress = wallet.address`) using `SCORE_PROXY_ADDRESS`
 - quote succeeds
 - `openLoan` tx succeeds
 - `LoanOpened` is found
