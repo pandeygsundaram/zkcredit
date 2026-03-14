@@ -1,0 +1,10 @@
+User-agent: *
+Allow: /
+
+Disallow: /api/
+Disallow: /auth/
+Disallow: /dashboard/
+Disallow: /wallet/
+Disallow: /private/
+
+Sitemap: https://zkcredit.io/sitemap.xml

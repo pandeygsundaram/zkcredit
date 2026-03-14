@@ -1,9 +1,4 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
-import React, { useState } from "react";
+import { useState } from "react";
 import { motion } from "motion/react";
 import Sidebar from "./Sidebar";
 import DashboardView from "./DashboardView";
@@ -18,11 +13,11 @@ interface DashboardLayoutProps {
   setIsDark: (dark: boolean) => void;
 }
 
-const DashboardLayout: React.FC<DashboardLayoutProps> = ({
+const DashboardLayout = ({
   onLogout,
   isDark,
   setIsDark,
-}) => {
+}: DashboardLayoutProps) => {
   const [activeTab, setActiveTab] = useState("dashboard");
 
   return (
@@ -39,13 +34,13 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({
           key={activeTab}
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.3 }}
+          transition={{ duration: 0.25 }}
         >
-          {activeTab === "dashboard"   && <DashboardView />}
-          {activeTab === "loans"       && <LoansView />}
+          {activeTab === "dashboard" && <DashboardView />}
+          {activeTab === "loans" && <LoansView />}
           {activeTab === "ens-profile" && <EnsProfile />}
-          {activeTab === "api-keys"    && <ApiKeysView />}
-          {activeTab === "settings"    && <SettingsView />}
+          {activeTab === "api-keys" && <ApiKeysView />}
+          {activeTab === "settings" && <SettingsView />}
         </motion.div>
       </main>
     </div>

@@ -186,4 +186,21 @@ const quote = (wallet, collateralUsd) => {
 
 const get = (wallet) => registry.get(wallet.toLowerCase()) || null;
 
-module.exports = { register, quote, get };
+const getByEnsName = (ensName) => {
+  if (!ensName) return null;
+
+  const normalizedEns = ensName.toLowerCase();
+  for (const agent of registry.values()) {
+    if (agent.ens_name?.toLowerCase() === normalizedEns) {
+      return agent;
+    }
+
+    if (agent.ens_identity?.name?.toLowerCase() === normalizedEns) {
+      return agent;
+    }
+  }
+
+  return null;
+};
+
+module.exports = { register, quote, get, getByEnsName };

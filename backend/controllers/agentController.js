@@ -35,6 +35,13 @@ const getAgent = (req, res) => {
   return res.status(200).json(agent);
 };
 
+const getAgentByEns = (req, res) => {
+  const { ensName } = req.params;
+  const agent = agentRegistry.getByEnsName(ensName);
+  if (!agent) return res.status(404).json({ error: 'Agent not found for ENS name' });
+  return res.status(200).json(agent);
+};
+
 // ─── POST /agents/quote ───────────────────────────────────────────────────────
 // Mirrors LoanManager.getQuote() — returns tier-based LTV/APR + full milestone schedule.
 const getQuote = (req, res) => {
@@ -63,4 +70,4 @@ const getQuote = (req, res) => {
   return res.status(200).json(quoteResult);
 };
 
-module.exports = { registerAgent, getAgent, getQuote };
+module.exports = { registerAgent, getAgent, getAgentByEns, getQuote };

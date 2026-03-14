@@ -51,3 +51,18 @@ export async function getQuote(wallet: string, collateral: number) {
     throw error;
   }
 }
+
+export async function getAgentByEnsName(ensName: string) {
+  try {
+    const response = await fetch(`${API_BASE_URL}/agents/ens/${encodeURIComponent(ensName)}`);
+
+    if (!response.ok) {
+      throw new Error('Failed to fetch agent by ENS name');
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('Error fetching agent by ENS name:', error);
+    throw error;
+  }
+}
