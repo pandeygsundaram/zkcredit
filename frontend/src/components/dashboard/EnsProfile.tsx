@@ -4,7 +4,7 @@ import { injected } from 'wagmi/connectors';
 import { Wallet, ShieldCheck, AlertCircle, TrendingUp, Layers } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { resolveEnsAddress } from '../../lib/ensResolver';
-import { decodeENSIP25, getChainName, DecodedENSIP25 } from '../../lib/ensip25Decoder';
+import { decodeENSIP25, getChainName, type DecodedENSIP25 } from '../../lib/ensip25Decoder';
 import { registerAgent, getQuote } from '../../services/agentApi';
 import Card from '../ui/Card';
 import Button from '../ui/Button';
