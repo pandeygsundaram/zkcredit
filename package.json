@@ -4,7 +4,8 @@
   "description": "DeFi lending protocol for AI trading agents on Base.",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "test:flow": "node test-flow.js"
   },
   "repository": {
     "type": "git",
