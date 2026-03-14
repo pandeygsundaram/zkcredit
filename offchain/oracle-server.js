@@ -4,6 +4,7 @@ const { ethers } = require('ethers');
 const { buildPoseidon } = require('circomlibjs');
 const { FileverseClient } = require('./fileverse-client');
 const { BitGoClient } = require('./bitgo-client');
+require('dotenv').config();
 
 const app = express();
 app.use(express.json());
@@ -11,21 +12,47 @@ app.use(express.json());
 const PORT = Number(process.env.PORT || 8787);
 const RPC_URL = process.env.RPC_URL;
 const ORACLE_PRIVATE_KEY = process.env.ORACLE_PRIVATE_KEY;
-const CREDIT_VERIFIER_ADDRESS = process.env.CREDIT_VERIFIER_ADDRESS;
-const ZK_CREDIT_VERIFIER_ADDRESS = process.env.ZK_CREDIT_VERIFIER_ADDRESS;
+const CREDIT_VERIFIER_ADDRESS = process.env.CREDIT_VERIFIER_ADDRESS || process.env.CREDIT_VERIFIER;
+const ZK_CREDIT_VERIFIER_ADDRESS = process.env.ZK_CREDIT_VERIFIER_ADDRESS || process.env.ZK_CREDIT_VERIFIER;
 const POLYMARKET_SUBGRAPH = process.env.POLYMARKET_SUBGRAPH || 'https://api.thegraph.com/subgraphs/name/polymarket/matic-markets';
 const POLYMARKET_DATA_API = process.env.POLYMARKET_DATA_API || 'https://data-api.polymarket.com';
 const POLYMARKET_GAMMA_API = process.env.POLYMARKET_GAMMA_API || 'https://gamma-api.polymarket.com';
 const POLYMARKET_TIMEOUT_MS = Number(process.env.POLYMARKET_TIMEOUT_MS || 10000);
+const LOAN_MANAGER_ADDRESS = process.env.LOAN_MANAGER_ADDRESS;
 
 const provider = new ethers.JsonRpcProvider(RPC_URL);
-const signer = new ethers.Wallet(ORACLE_PRIVATE_KEY, provider);
+if (!ORACLE_PRIVATE_KEY) {
+  throw new Error('Missing ORACLE_PRIVATE_KEY in environment');
+}
+
+if (!/^0x[0-9a-fA-F]{64}$/.test(ORACLE_PRIVATE_KEY.trim())) {
+  throw new Error('Invalid ORACLE_PRIVATE_KEY format. Expected 0x + 64 hex characters');
+}
+
+if (!RPC_URL) {
+  throw new Error('Missing RPC_URL in environment');
+}
+
+if (!CREDIT_VERIFIER_ADDRESS || !ethers.isAddress(CREDIT_VERIFIER_ADDRESS)) {
+  throw new Error('Missing or invalid CREDIT_VERIFIER_ADDRESS (or CREDIT_VERIFIER) in environment');
+}
+
+if (!ZK_CREDIT_VERIFIER_ADDRESS || !ethers.isAddress(ZK_CREDIT_VERIFIER_ADDRESS)) {
+  throw new Error('Missing or invalid ZK_CREDIT_VERIFIER_ADDRESS (or ZK_CREDIT_VERIFIER) in environment');
+}
+
+const signer = new ethers.Wallet(ORACLE_PRIVATE_KEY.trim(), provider);
 
 const verifier = new ethers.Contract(
   CREDIT_VERIFIER_ADDRESS,
   ['function submitScore(address,uint256,uint256,bytes32,uint256,bytes) external'],
   signer
 );
+
+// LoanManager contract for getQuote
+const LOAN_MANAGER_ABI = [
+  "function getQuote(address[] calldata collateralTokens, uint256[] calldata collateralAmounts) public view returns (uint256 score, uint8 tier, uint256 aprBps, uint256 maxPrincipal)"
+];
 
 const fileverse = new FileverseClient({ endpoint: process.env.FILEVERSE_ENDPOINT, apiKey: process.env.FILEVERSE_API_KEY });
 const bitgo = new BitGoClient({ accessToken: process.env.BITGO_ACCESS_TOKEN, baseUrl: process.env.BITGO_BASE_URL });
@@ -50,6 +77,13 @@ function norm(v, min, max, outMin, outMax) {
   if (v >= max) return outMax;
   return outMin + ((v - min) * (outMax - outMin)) / (max - min);
 }
+
+const loanManager = new ethers.Contract(
+  process.env.LOAN_MANAGER_ADDRESS,
+  LOAN_MANAGER_ABI,
+  provider
+);
+
 
 async function fetchPolymarket(proxyAddress) {
   const user = proxyAddress.toLowerCase();
@@ -289,6 +323,85 @@ app.get('/bitgo/status/:agentAddress', async (req, res) => {
     res.json(status);
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// Get quote endpoint
+app.post('/get-quote', async (req, res) => {
+  try {
+    const { agentAddress, collateralTokens, collateralAmounts } = req.body;
+
+    if (!agentAddress || !collateralTokens || !collateralAmounts) {
+      return res.status(400).json({
+        error: 'Missing required fields: agentAddress, collateralTokens, collateralAmounts'
+      });
+    }
+
+    if (!Array.isArray(collateralTokens) || !Array.isArray(collateralAmounts)) {
+      return res.status(400).json({
+        error: 'collateralTokens and collateralAmounts must be arrays'
+      });
+    }
+
+    if (collateralTokens.length !== collateralAmounts.length) {
+      return res.status(400).json({
+        error: 'collateralTokens and collateralAmounts must have same length'
+      });
+    }
+
+    // Check if score is valid first
+    const creditVerifier = new ethers.Contract(
+      CREDIT_VERIFIER_ADDRESS,
+      ['function isScoreValid(address) view returns (bool)', 'function latestRecords(address) view returns (uint256,uint256,uint256)'],
+      provider
+    );
+
+    const valid = await creditVerifier.isScoreValid(agentAddress);
+    if (!valid) {
+      return res.status(400).json({
+        error: 'Score expired or missing. Call /submit-score first.',
+        agentAddress
+      });
+    }
+
+    // Get current score info
+    const [score, leverage] = await creditVerifier.latestRecords(agentAddress);
+
+    // Call on-chain getQuote with agent as sender
+    const quote = await loanManager.getQuote(collateralTokens, collateralAmounts, {
+      from: agentAddress
+    });
+
+    // Format response
+    const tierNames = ['Very Poor', 'Poor', 'Fair', 'Good', 'Excellent', 'Exceptional'];
+
+    const scoreStr = score.toString();
+    const leverageStr = leverage.toString();
+    const aprBpsStr = quote.aprBps.toString();
+    const maxPrincipalStr = quote.maxPrincipal.toString();
+    const tier = Number(quote.tier);
+
+    res.json({
+      agentAddress,
+      score: scoreStr,
+      tier,
+      tierName: tierNames[tier] || 'Unknown',
+      aprBps: aprBpsStr,
+      aprPercent: (Number(aprBpsStr) / 100).toFixed(2) + '%',
+      maxPrincipal: maxPrincipalStr,
+      maxPrincipalFormatted: ethers.formatUnits(maxPrincipalStr, 6) + ' USDC',
+      leverageBps: leverageStr,
+      collateralTokens,
+      collateralAmounts,
+      scoreValid: true
+    });
+
+  } catch (e) {
+    console.error('Get quote error:', e);
+    res.status(500).json({
+      error: e.message,
+      code: e.code
+    });
   }
 });
 
