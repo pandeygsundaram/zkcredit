@@ -79,7 +79,7 @@ Submit a score for a wallet you control (`agentAddress`) using any proxy history
 curl -X POST http://localhost:8787/submit-score \
   -H "content-type: application/json" \
   -d '{
-    "agentAddress":"0xYOUR_WALLET_ADDRESS",
+    "agentAddress":"0xA93Fc5280d63D11e809b77432a941d64edC0958e",
     "proxyAddress":"0xA93Fc5280d63D11e809b77432a941d64edC0958e",
     "leverageBps":10000
   }'

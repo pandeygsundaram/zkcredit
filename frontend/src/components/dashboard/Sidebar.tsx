@@ -14,6 +14,7 @@ import {
   Settings,
   LogOut,
   Fingerprint,
+  Cpu,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 
@@ -33,6 +34,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   setIsDark,
 }) => {
   const menuItems = [
+    { id: "agents",      label: "AI Agents",     icon: Cpu },
     { id: "dashboard",   label: "Dashboard",    icon: LayoutDashboard },
     { id: "loans",       label: "Loans",         icon: FileText },
     { id: "ens-profile", label: "ENS Identity",  icon: Fingerprint },

@@ -89,9 +89,9 @@ const Navbar: React.FC<NavbarProps> = ({ onNavigate, isDark, setIsDark }) => {
           <Button
             size="sm"
             className="hidden sm:inline-flex"
-            onClick={() => onNavigate("login")}
+            onClick={() => onNavigate("dashboard")}
           >
-            Launch App
+            View Agents
           </Button>
         </div>
       </div>
