@@ -52,9 +52,9 @@ const Hero: React.FC<HeroProps> = ({ onNavigate }) => {
               <Button
                 size="lg"
                 className="group min-w-[200px]"
-                onClick={() => onNavigate("login")}
+                onClick={() => onNavigate("dashboard")}
               >
-                Connect Agent{" "}
+                Explore Agents{" "}
                 <ArrowRight className="ml-2 h-4 w-4 transition-transform group-hover:translate-x-1" />
               </Button>
               <Button variant="outline" size="lg" className="min-w-[200px]">

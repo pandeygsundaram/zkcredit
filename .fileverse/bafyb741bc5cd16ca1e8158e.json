@@ -1,0 +1,13 @@
+{
+  "cid": "bafyb741bc5cd16ca1e8158e",
+  "payload": {
+    "schema": "zkcredit.agent.profile.v1",
+    "agent": "0x14e0D556fFe746BC5ab12902423bDa63DeA08Bf9",
+    "metadata": {
+      "score": 400,
+      "proofHash": "0x6abe8b815051e5fe49b533fc4ba01cab5188946751ac115bb9d8af033e22d76c",
+      "issuedAt": 1773531997
+    },
+    "createdAt": "2026-03-14T23:46:40.151Z"
+  }
+}
